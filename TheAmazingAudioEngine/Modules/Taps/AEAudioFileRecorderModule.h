@@ -72,9 +72,9 @@ typedef void (^AEAudioFileRecorderModuleCompletionBlock)();
 - (void)stopRecordingAtTime:(AEHostTicks)time completionBlock:(AEAudioFileRecorderModuleCompletionBlock _Nullable)block;
 
 /*!
- * Stop recording
+ * Stop recording immediately
  */
-- (void)stopRecording;
+- (void)stopRecordingImmediately;
 
 @property (nonatomic, readonly) BOOL recording; //!< Whether recording is in progress
 @property (nonatomic, readonly) AESeconds recordedTime; //!< Current recording length, in seconds

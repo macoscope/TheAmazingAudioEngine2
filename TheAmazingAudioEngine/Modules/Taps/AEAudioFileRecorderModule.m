@@ -60,7 +60,7 @@
     _startTime = time ? time : AECurrentTimeInHostTicks();
 }
 
-- (void)stopRecording {
+- (void)stopRecordingImmediately {
     MarkAsCompleted(self);
 
     while (_beingActiveOnAudioThread) {
