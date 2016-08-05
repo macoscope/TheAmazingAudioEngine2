@@ -20,6 +20,7 @@
 @interface AEAudioFileRecorderModule () {
     ExtAudioFileRef _audioFile;
     pthread_mutex_t _audioFileMutex;
+    pthread_mutex_t _recordedTimeMutex;
     AEHostTicks    _startTime;
     AEHostTicks    _stopTime;
     BOOL           _complete;
@@ -31,6 +32,7 @@
 @end
 
 @implementation AEAudioFileRecorderModule
+@synthesize recordedTime = _recordedTime;
 
 - (instancetype)initWithRenderer:(AERenderer *)renderer URL:(NSURL *)url
                             type:(AEAudioFileType)type error:(NSError **)error {
@@ -51,6 +53,7 @@
     self.numberOfChannels = numberOfChannels;
     
     pthread_mutex_init(&_audioFileMutex, NULL);
+    pthread_mutex_init(&_recordedTimeMutex, NULL);
     
     return self;
 }
@@ -60,6 +63,15 @@
         [self finishWriting];
     }
     pthread_mutex_destroy(&_audioFileMutex);
+    pthread_mutex_destroy(&_recordedTimeMutex);
+}
+
+- (AESeconds)recordedTime
+{
+    pthread_mutex_lock(&_recordedTimeMutex);
+    AESeconds seconds = _recordedTime;
+    pthread_mutex_unlock(&_recordedTimeMutex);
+    return seconds;
 }
 
 - (void)beginRecordingAtTime:(AEHostTicks)time {
@@ -95,7 +107,7 @@
 }
 
 static void AEAudioFileRecorderModuleProcess(__unsafe_unretained AEAudioFileRecorderModule * THIS,
-                                        const AERenderContext * _Nonnull context) {
+                                             const AERenderContext * _Nonnull context) {
     
     if ( pthread_mutex_trylock(&THIS->_audioFileMutex) != 0 ) {
         return;
@@ -117,7 +129,7 @@ static void AEAudioFileRecorderModuleProcess(__unsafe_unretained AEAudioFileReco
     }
     
     AEHostTicks hostTimeAtBufferEnd
-        = context->timestamp->mHostTime + AEHostTicksFromSeconds((double)context->frames / context->sampleRate);
+    = context->timestamp->mHostTime + AEHostTicksFromSeconds((double)context->frames / context->sampleRate);
     if ( startTime && startTime > hostTimeAtBufferEnd ) {
         pthread_mutex_unlock(&THIS->_audioFileMutex);
         return;
@@ -164,7 +176,12 @@ static void AEAudioFileRecorderModuleProcess(__unsafe_unretained AEAudioFileReco
     }
     
     AECheckOSStatus(ExtAudioFileWriteAsync(THIS->_audioFile, frames, buffer), "ExtAudioFileWriteAsync");
+    
     THIS->_recordedFrames += frames;
+    
+    pthread_mutex_lock(&THIS->_recordedTimeMutex);
+    THIS->_recordedTime = (AESeconds)THIS->_recordedFrames / context->sampleRate;
+    pthread_mutex_unlock(&THIS->_recordedTimeMutex);
     
     if ( stopTime && stopTime < hostTimeAtBufferEnd ) {
         THIS->_complete = YES;
