@@ -26,6 +26,19 @@
 
 #import "AEUtilities.h"
 #import "AETime.h"
+#include <AudioToolbox/AudioFormat.h>
+
+
+
+void SetFileWriterConfigurationError(OSStatus status, NSError **error)
+{
+    if ( error ) {
+        *error = [NSError errorWithDomain:NSOSStatusErrorDomain
+                                     code:status
+                                 userInfo:@{ NSLocalizedDescriptionKey:
+                                                 NSLocalizedString(@"Couldn't configure the file writer", @"") }];
+    }
+}
 
 AudioComponentDescription AEAudioComponentDescriptionMake(OSType manufacturer, OSType type, OSType subtype) {
     AudioComponentDescription description;
@@ -54,7 +67,7 @@ BOOL AERateLimit(void) {
 }
 
 ExtAudioFileRef AEExtAudioFileCreate(NSURL * url, AEAudioFileType fileType, double sampleRate, int channelCount,
-                                        NSError ** error) {
+                                     NSError ** error) {
     
     AudioStreamBasicDescription asbd = {
         .mChannelsPerFrame = channelCount,
@@ -92,7 +105,7 @@ ExtAudioFileRef AEExtAudioFileCreate(NSURL * url, AEAudioFileType fileType, doub
         // 16-bit signed integer
         asbd.mFormatID = kAudioFormatLinearPCM;
         asbd.mFormatFlags = kLinearPCMFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked |
-                            (fileType == AEAudioFileTypeAIFFInt16 ? kAudioFormatFlagIsBigEndian : 0);
+        (fileType == AEAudioFileTypeAIFFInt16 ? kAudioFormatFlagIsBigEndian : 0);
         asbd.mBitsPerChannel = 16;
         asbd.mBytesPerPacket = asbd.mChannelsPerFrame * 2;
         asbd.mBytesPerFrame = asbd.mBytesPerPacket;
@@ -105,34 +118,64 @@ ExtAudioFileRef AEExtAudioFileCreate(NSURL * url, AEAudioFileType fileType, doub
         }
     }
     
+    
+    
     // Open the file
     ExtAudioFileRef audioFile;
     OSStatus status = ExtAudioFileCreateWithURL((__bridge CFURLRef)url, fileTypeID, &asbd, NULL, kAudioFileFlags_EraseFile,
                                                 &audioFile);
     if ( !AECheckOSStatus(status, "ExtAudioFileCreateWithURL") ) {
         if ( error )
-        *error = [NSError errorWithDomain:NSOSStatusErrorDomain
-                                     code:status
-                                 userInfo:@{ NSLocalizedDescriptionKey:
-                                                 NSLocalizedString(@"Couldn't open the output file", @"") }];
+            *error = [NSError errorWithDomain:NSOSStatusErrorDomain
+                                         code:status
+                                     userInfo:@{ NSLocalizedDescriptionKey:
+                                                     NSLocalizedString(@"Couldn't open the output file", @"") }];
         return NULL;
     }
     
     // Set the client format
     asbd = AEAudioDescriptionWithChannelsAndRate(channelCount, sampleRate);
+    
     status = ExtAudioFileSetProperty(audioFile,
                                      kExtAudioFileProperty_ClientDataFormat,
                                      sizeof(asbd),
                                      &asbd);
+    
+    
     if ( !AECheckOSStatus(status, "ExtAudioFileSetProperty") ) {
-        ExtAudioFileDispose(audioFile);
-        if ( error )
-        *error = [NSError errorWithDomain:NSOSStatusErrorDomain
-                                     code:status
-                                 userInfo:@{ NSLocalizedDescriptionKey:
-                                                 NSLocalizedString(@"Couldn't configure the file writer", @"") }];
-        return NULL;
+        //Error: Hardware codec already in use. Switch to software codec instead.
+        //http://lists.apple.com/archives/coreaudio-api/2009/Aug/msg00066.html
+        if (status == 1752656245) {
+            UInt32 codecManfacturer = kAppleSoftwareAudioCodecManufacturer;
+            status = ExtAudioFileSetProperty(audioFile,
+                                             kExtAudioFileProperty_CodecManufacturer,
+                                             sizeof(UInt32),
+                                             &codecManfacturer);
+            
+            if ( !AECheckOSStatus(status, "ExtAudioFileSetProperty") ) {
+                ExtAudioFileDispose(audioFile);
+                SetFileWriterConfigurationError(status, error);
+                return NULL;
+            }
+            
+            status = ExtAudioFileSetProperty(audioFile,
+                                             kExtAudioFileProperty_ClientDataFormat,
+                                             sizeof(asbd),
+                                             &asbd);
+            
+            if ( !AECheckOSStatus(status, "ExtAudioFileSetProperty") ) {
+                ExtAudioFileDispose(audioFile);
+                SetFileWriterConfigurationError(status, error);
+                return NULL;
+            }
+            
+        } else {
+            ExtAudioFileDispose(audioFile);
+            SetFileWriterConfigurationError(status, error);
+            return NULL;
+        }
     }
     
     return audioFile;
 }
+
