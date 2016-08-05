@@ -35,8 +35,7 @@ void SetFileWriterConfigurationError(OSStatus status, NSError **error)
     if ( error ) {
         *error = [NSError errorWithDomain:NSOSStatusErrorDomain
                                      code:status
-                                 userInfo:@{ NSLocalizedDescriptionKey:
-                                                 NSLocalizedString(@"Couldn't configure the file writer", @"") }];
+                                 userInfo:@{ NSLocalizedDescriptionKey: NSLocalizedString(@"Couldn't configure the file writer", @"") }];
     }
 }
 
@@ -66,116 +65,132 @@ BOOL AERateLimit(void) {
     return YES;
 }
 
-ExtAudioFileRef AEExtAudioFileCreate(NSURL * url, AEAudioFileType fileType, double sampleRate, int channelCount,
-                                     NSError ** error) {
-    
-    AudioStreamBasicDescription asbd = {
+AudioFileTypeID EXAudioFileTypeToAudioFileTypeID(AEAudioFileType fileType) {
+    if ( fileType == AEAudioFileTypeM4A ) {
+        return kAudioFileM4AType;
+
+    } else if ( fileType == AEAudioFileTypeAIFFFloat32 ) {
+        return kAudioFileAIFCType;
+
+    } else {
+        if ( fileType == AEAudioFileTypeAIFFInt16 ) {
+            return kAudioFileAIFFType;
+        } else {
+            return kAudioFileWAVEType;
+        }
+    }
+}
+
+bool EXAudioStreamBasicDescription(AEAudioFileType fileType, double sampleRate, int channelCount, AudioStreamBasicDescription * asbd, NSError ** error) {
+
+    if (!asbd) {
+        return true;
+    }
+
+    *asbd = (AudioStreamBasicDescription){
         .mChannelsPerFrame = channelCount,
         .mSampleRate = sampleRate,
     };
-    AudioFileTypeID fileTypeID;
-    
+
     if ( fileType == AEAudioFileTypeM4A ) {
         // AAC encoding in M4A container
         // Get the output audio description for encoding AAC
-        asbd.mFormatID = kAudioFormatMPEG4AAC;
-        UInt32 size = sizeof(asbd);
-        OSStatus status = AudioFormatGetProperty(kAudioFormatProperty_FormatInfo, 0, NULL, &size, &asbd);
+        asbd->mFormatID = kAudioFormatMPEG4AAC;
+        UInt32 size = sizeof(*asbd);
+        OSStatus status = AudioFormatGetProperty(kAudioFormatProperty_FormatInfo, 0, NULL, &size, asbd);
         if ( !AECheckOSStatus(status, "AudioFormatGetProperty(kAudioFormatProperty_FormatInfo") ) {
             int fourCC = CFSwapInt32HostToBig(status);
             if ( error ) *error = [NSError errorWithDomain:NSOSStatusErrorDomain
                                                       code:status
                                                   userInfo:@{ NSLocalizedDescriptionKey:
                                                                   [NSString stringWithFormat:NSLocalizedString(@"Couldn't prepare the output format (error %d/%4.4s)", @""), status, (char*)&fourCC]}];
-            return NULL;
+            return false;
         }
-        fileTypeID = kAudioFileM4AType;
-        
+
     } else if ( fileType == AEAudioFileTypeAIFFFloat32 ) {
         // 32-bit floating point
-        asbd.mFormatID = kAudioFormatLinearPCM;
-        asbd.mFormatFlags = kLinearPCMFormatFlagIsFloat | kAudioFormatFlagIsPacked | kAudioFormatFlagIsBigEndian;
-        asbd.mBitsPerChannel = sizeof(float) * 8;
-        asbd.mBytesPerPacket = asbd.mChannelsPerFrame * sizeof(float);
-        asbd.mBytesPerFrame = asbd.mBytesPerPacket;
-        asbd.mFramesPerPacket = 1;
-        fileTypeID = kAudioFileAIFCType;
-        
+        asbd->mFormatID = kAudioFormatLinearPCM;
+        asbd->mFormatFlags = kLinearPCMFormatFlagIsFloat | kAudioFormatFlagIsPacked | kAudioFormatFlagIsBigEndian;
+        asbd->mBitsPerChannel = sizeof(float) * 8;
+        asbd->mBytesPerPacket = asbd->mChannelsPerFrame * sizeof(float);
+        asbd->mBytesPerFrame = asbd->mBytesPerPacket;
+        asbd->mFramesPerPacket = 1;
+
     } else {
         // 16-bit signed integer
-        asbd.mFormatID = kAudioFormatLinearPCM;
-        asbd.mFormatFlags = kLinearPCMFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked |
+        asbd->mFormatID = kAudioFormatLinearPCM;
+        asbd->mFormatFlags = kLinearPCMFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked |
         (fileType == AEAudioFileTypeAIFFInt16 ? kAudioFormatFlagIsBigEndian : 0);
-        asbd.mBitsPerChannel = 16;
-        asbd.mBytesPerPacket = asbd.mChannelsPerFrame * 2;
-        asbd.mBytesPerFrame = asbd.mBytesPerPacket;
-        asbd.mFramesPerPacket = 1;
-        
-        if ( fileType == AEAudioFileTypeAIFFInt16 ) {
-            fileTypeID = kAudioFileAIFFType;
-        } else {
-            fileTypeID = kAudioFileWAVEType;
-        }
+        asbd->mBitsPerChannel = 16;
+        asbd->mBytesPerPacket = asbd->mChannelsPerFrame * 2;
+        asbd->mBytesPerFrame = asbd->mBytesPerPacket;
+        asbd->mFramesPerPacket = 1;
     }
-    
-    
-    
-    // Open the file
+
+    return true;
+}
+
+ExtAudioFileRef AEExtAudioFileCreateWithCodecPreference(NSURL * url, AEAudioFileType fileType, bool forceSoftwareCodec, double sampleRate, int channelCount, NSError ** error) {
+
     ExtAudioFileRef audioFile;
+    AudioStreamBasicDescription asbd;
+    AudioFileTypeID fileTypeID = EXAudioFileTypeToAudioFileTypeID(fileType);
+
+    if ( !EXAudioStreamBasicDescription(fileType, sampleRate, channelCount, &asbd, error) ) {
+        return NULL;
+    }
     OSStatus status = ExtAudioFileCreateWithURL((__bridge CFURLRef)url, fileTypeID, &asbd, NULL, kAudioFileFlags_EraseFile,
                                                 &audioFile);
     if ( !AECheckOSStatus(status, "ExtAudioFileCreateWithURL") ) {
         if ( error )
             *error = [NSError errorWithDomain:NSOSStatusErrorDomain
                                          code:status
-                                     userInfo:@{ NSLocalizedDescriptionKey:
-                                                     NSLocalizedString(@"Couldn't open the output file", @"") }];
+                                     userInfo:@{ NSLocalizedDescriptionKey: NSLocalizedString(@"Couldn't open the output file", @"") }];
         return NULL;
     }
-    
-    // Set the client format
+
     asbd = AEAudioDescriptionWithChannelsAndRate(channelCount, sampleRate);
-    
+
+    if ( forceSoftwareCodec ) {
+        UInt32 codecManfacturer = kAppleSoftwareAudioCodecManufacturer;
+        status = ExtAudioFileSetProperty(audioFile,
+                                         kExtAudioFileProperty_CodecManufacturer,
+                                         sizeof(UInt32),
+                                         &codecManfacturer);
+
+        if ( !AECheckOSStatus(status, "ExtAudioFileSetProperty") ) {
+            ExtAudioFileDispose(audioFile);
+            SetFileWriterConfigurationError(status, error);
+            return NULL;
+        }
+    }
+
     status = ExtAudioFileSetProperty(audioFile,
                                      kExtAudioFileProperty_ClientDataFormat,
                                      sizeof(asbd),
                                      &asbd);
-    
-    
+
+
     if ( !AECheckOSStatus(status, "ExtAudioFileSetProperty") ) {
         //Error: Hardware codec already in use. Switch to software codec instead.
         //http://lists.apple.com/archives/coreaudio-api/2009/Aug/msg00066.html
-        if (status == 1752656245) {
-            UInt32 codecManfacturer = kAppleSoftwareAudioCodecManufacturer;
-            status = ExtAudioFileSetProperty(audioFile,
-                                             kExtAudioFileProperty_CodecManufacturer,
-                                             sizeof(UInt32),
-                                             &codecManfacturer);
-            
-            if ( !AECheckOSStatus(status, "ExtAudioFileSetProperty") ) {
-                ExtAudioFileDispose(audioFile);
-                SetFileWriterConfigurationError(status, error);
-                return NULL;
-            }
-            
-            status = ExtAudioFileSetProperty(audioFile,
-                                             kExtAudioFileProperty_ClientDataFormat,
-                                             sizeof(asbd),
-                                             &asbd);
-            
-            if ( !AECheckOSStatus(status, "ExtAudioFileSetProperty") ) {
-                ExtAudioFileDispose(audioFile);
-                SetFileWriterConfigurationError(status, error);
-                return NULL;
-            }
-            
+        if ( status == 'hwiu' ) {
+            ExtAudioFileDispose(audioFile);
+            NSLog(@"Warning: Hardware codec already in use. Switching to software codec.");
+            return AEExtAudioFileCreateWithCodecPreference(url, fileType, true, sampleRate, channelCount, error);
+
         } else {
             ExtAudioFileDispose(audioFile);
             SetFileWriterConfigurationError(status, error);
             return NULL;
         }
     }
-    
+
     return audioFile;
 }
 
+ExtAudioFileRef _Nullable AEExtAudioFileCreate(NSURL * _Nonnull url, AEAudioFileType fileType, double sampleRate,
+                                               int channelCount, NSError * _Nullable * _Nullable error)
+{
+    return AEExtAudioFileCreateWithCodecPreference(url, fileType, false, sampleRate, channelCount, error);
+}
