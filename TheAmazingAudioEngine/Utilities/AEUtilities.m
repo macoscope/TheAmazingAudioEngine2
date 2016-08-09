@@ -83,9 +83,7 @@ AudioFileTypeID EXAudioFileTypeToAudioFileTypeID(AEAudioFileType fileType) {
 
 bool EXAudioStreamBasicDescription(AEAudioFileType fileType, double sampleRate, int channelCount, AudioStreamBasicDescription * asbd, NSError ** error) {
 
-    if (!asbd) {
-        return true;
-    }
+    NSCAssert(asbd, @"Provide valid pointer to AudioStreamBasicDescription");
 
     *asbd = (AudioStreamBasicDescription){
         .mChannelsPerFrame = channelCount,
